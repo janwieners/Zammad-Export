@@ -1,6 +1,6 @@
 /**
  * generate_overview.ts
- * Erzeugt tickets/index.html inkl. Ticket-Titel aus ticket.json
+ * Erzeugt tickets/index.html inkl. Ticket-Titel und Erstellungsdatum
  */
 
 import { readdir, readFile, writeFile } from "fs/promises";
@@ -17,9 +17,21 @@ function escapeHtml(s: string) {
         .replaceAll("'", "&#39;");
 }
 
+function formatDate(iso?: string): string {
+    if (!iso) return "(kein Datum)";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "(ungültiges Datum)";
+    return d.toLocaleDateString("de-DE", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    });
+}
+
 type TicketEntry = {
     id: number;
     title: string;
+    createdAt?: string;
 };
 
 function buildOverviewHtml(tickets: TicketEntry[]) {
@@ -34,6 +46,9 @@ function buildOverviewHtml(tickets: TicketEntry[]) {
                 <a href="${href}">
                   <strong>#${t.id}</strong> – ${escapeHtml(t.title)}
                 </a>
+                <div class="meta">
+                  Erstellt am: ${escapeHtml(formatDate(t.createdAt))}
+                </div>
               </li>`;
                 })
                 .join("\n")}
@@ -51,7 +66,8 @@ function buildOverviewHtml(tickets: TicketEntry[]) {
     h1 { margin: 0 0 10px; font-size: 22px; }
     .muted { opacity: .75; }
     .list { padding-left: 18px; }
-    li { margin: 8px 0; }
+    li { margin: 10px 0; }
+    .meta { font-size: 12px; opacity: .8; margin-left: 4px; }
     a { text-decoration: none; }
     a:hover { text-decoration: underline; }
   </style>
@@ -86,14 +102,22 @@ async function main() {
                     ? ticket.title
                     : "(ohne Titel)";
 
-            tickets.push({ id, title });
+            const createdAt =
+                typeof ticket.created_at === "string"
+                    ? ticket.created_at
+                    : undefined;
+
+            tickets.push({ id, title, createdAt });
         } catch {
-            // falls ticket.json fehlt oder kaputt ist
-            tickets.push({ id, title: "(Titel nicht lesbar)" });
+            tickets.push({
+                id,
+                title: "(Titel nicht lesbar)",
+                createdAt: undefined,
+            });
         }
     }
 
-    // sortieren nach Ticket-ID
+    // nach Ticket-ID sortieren (alternativ: nach createdAt)
     tickets.sort((a, b) => a.id - b.id);
 
     const html = buildOverviewHtml(tickets);
