@@ -1,0 +1,14 @@
+{
+  "name": "zammad",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "typescript": "^5.5.3"
+  },
+  "private": true
+}
