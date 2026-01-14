@@ -136,7 +136,7 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
           <span>Erstellt: ${escapeHtml(formatDate(t.createdAt))}</span>
           <span>Autor: ${escapeHtml(t.author)}</span>
         </div>
-        <div class="preview">${escapeHtml(t.preview)}</div>
+        <div class="preview"><pre>${t.preview}</pre></div>
       </li>`
         )
         .join("\n");
