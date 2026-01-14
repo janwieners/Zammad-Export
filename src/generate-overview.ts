@@ -13,8 +13,11 @@
 import { readdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 
-const TICKETS_DIR = "out/tickets";
-const OUT_DIR = "out";
+import { resolve } from "path";
+
+const OUT_DIR = resolve("out");
+const TICKETS_DIR = resolve("out/tickets");
+
 const PREVIEW_MAX = 128;
 
 /* ---------------- Helpers ---------------- */
