@@ -13,8 +13,8 @@
 import { readdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 
-const TICKETS_DIR = "tickets";
-const OUT_DIR = "."; // 👈 eine Ebene höher
+const TICKETS_DIR = "out/tickets";
+const OUT_DIR = "out";
 const PREVIEW_MAX = 128;
 
 /* ---------------- Helpers ---------------- */
