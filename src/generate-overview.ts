@@ -1,13 +1,21 @@
 /**
  * generate-overview.ts
  *
- * Output:
- *  - out/index.html
- *  - out/index-YYYY.html (pro Jahr)
+ * Erzeugt:
+ *  - out/index.html              (Landing-Page mit Jahreslinks)
+ *  - out/index-YYYY.html         (eine Übersicht pro Jahr)
  *
- * Input:
+ * Liest Daten aus:
  *  - out/tickets/ticket-<id>/ticket.json
  *  - out/tickets/ticket-<id>/articles.json
+ *
+ * Features:
+ *  - Live-Suche (Client-side) in den Jahresübersichten
+ *  - Anzeige: Ticket-ID, Titel, Erstellungsdatum, Autor (Name), Vorschau (max 128)
+ *
+ * Hinweis:
+ *  - Vorschau wird bewusst NICHT escaped in <pre>${t.preview}</pre>.
+ *    Stelle sicher, dass t.preview kein unsicheres HTML/JS enthält.
  */
 
 import { readdir, readFile, writeFile } from "fs/promises";
@@ -16,18 +24,6 @@ import { join } from "path";
 const TICKETS_DIR = "out/tickets";
 const OUT_DIR = "out";
 const PREVIEW_MAX = 128;
-
-type AuthorRole = "customer" | "agent" | "unknown";
-
-type TicketEntry = {
-    id: number;
-    title: string;
-    createdAt?: string;
-    year: number | "unknown";
-    author: string;
-    role: AuthorRole;
-    preview: string; // (kann bei dir bewusst unescaped sein)
-};
 
 /* ---------------- Helpers ---------------- */
 
@@ -77,9 +73,9 @@ async function readJson(path: string): Promise<any | null> {
 /* ---------------- Derivations ---------------- */
 
 /**
- * Autorname (best effort):
- *  - bevorzugt: erster Artikel -> from
- *  - fallback: ticket.created_by.fullname/name (falls vorhanden)
+ * Autorname (best effort, ohne API):
+ *  - bevorzugt: erster Artikel -> from (meist Name oder "Name <mail@...>")
+ *  - fallback: ticket.created_by.fullname/name/login/email (falls im Export enthalten)
  */
 function deriveAuthor(ticket: any, articles: any[] | null): string {
     if (Array.isArray(articles) && articles.length > 0) {
@@ -94,33 +90,6 @@ function deriveAuthor(ticket: any, articles: any[] | null): string {
         cleanText(ticket?.created_by?.email);
 
     return name || "(unbekannt)";
-}
-
-/**
- * Customer vs Agent (best effort, ohne API):
- * Prüft diverse mögliche Feldnamen im ersten Artikel.
- */
-function deriveRole(ticket: any, articles: any[] | null): AuthorRole {
-    const first = Array.isArray(articles) && articles.length > 0 ? articles[0] : null;
-
-    const candidates: unknown[] = [
-        first?.sender,         // häufig "Customer" / "Agent"
-        first?.sender_type,    // manchmal "customer"/"agent"
-        first?.type,           // je nach Setup
-        first?.created_by?.role,
-        first?.created_by?.type,
-    ];
-
-    for (const c of candidates) {
-        const s = cleanText(c).toLowerCase();
-        if (!s) continue;
-        if (s.includes("customer")) return "customer";
-        if (s.includes("agent")) return "agent";
-    }
-
-    // kleine Heuristik: wenn ticket.customer_id vorhanden ist und owner_id != null,
-    // heißt das nicht sicher "Agent", aber manchmal hilfreich. Standard: unknown.
-    return "unknown";
 }
 
 /**
@@ -144,13 +113,18 @@ function derivePreview(articles: any[] | null): string {
     return "(keine Vorschau)";
 }
 
-/* ---------------- HTML builders ---------------- */
+/* ---------------- Types ---------------- */
 
-function roleLabel(role: AuthorRole) {
-    if (role === "customer") return "Customer";
-    if (role === "agent") return "Agent";
-    return "Unbekannt";
-}
+type TicketEntry = {
+    id: number;
+    title: string;
+    createdAt?: string;
+    year: number | "unknown";
+    author: string;
+    preview: string;
+};
+
+/* ---------------- HTML builders ---------------- */
 
 function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
     const title =
@@ -158,21 +132,18 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
             ? "Ticket-Export – Unbekanntes Jahr"
             : `Ticket-Export – ${year}`;
 
-    // data-search enthält text für Live-Suche (klein geschrieben)
     const items = tickets
         .map((t) => {
-            const searchText = `${t.id} ${t.title} ${t.author} ${t.preview} ${formatDate(t.createdAt)} ${roleLabel(t.role)}`
+            const searchText = `${t.id} ${t.title} ${t.author} ${t.preview} ${formatDate(t.createdAt)}`
                 .toLowerCase()
                 .replace(/\s+/g, " ")
                 .trim();
 
-            const roleClass = `role-${t.role}`;
-            return `<li class="item ${roleClass}" data-search="${escapeHtml(searchText)}">
+            return `<li class="item" data-search="${escapeHtml(searchText)}">
         <div class="top">
           <a href="tickets/ticket-${t.id}/index.html">
             <strong>#${t.id}</strong> – ${escapeHtml(t.title)}
           </a>
-          <span class="badge ${roleClass}">${escapeHtml(roleLabel(t.role))}</span>
         </div>
         <div class="meta">
           <span>Erstellt: ${escapeHtml(formatDate(t.createdAt))}</span>
@@ -199,24 +170,13 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
   .count { font-size: 12px; opacity: .8; }
   .list { list-style: none; padding: 0; margin: 0; max-width: 1100px; }
   .item { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
-  .top { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
   .top a { text-decoration: none; }
   .top a:hover { text-decoration: underline; }
   .meta { font-size: 12px; opacity: .8; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
   .preview { margin-top: 8px; opacity: .95; }
   .preview pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; }
-  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(127,127,127,.45); opacity: .95; }
-
-  /* farbliche Unterscheidung */
-  .role-customer { border-left: 6px solid #2e7d32; }
-  .role-agent    { border-left: 6px solid #1565c0; }
-  .role-unknown  { border-left: 6px solid rgba(127,127,127,.6); }
-
-  .badge.role-customer { background: rgba(46,125,50,.12); }
-  .badge.role-agent    { background: rgba(21,101,192,.12); }
-  .badge.role-unknown  { background: rgba(127,127,127,.12); }
-
   .nav { margin-top: 14px; }
+  a { word-break: break-word; }
 </style>
 </head>
 <body>
@@ -280,11 +240,11 @@ function buildLandingHtml(years: Array<number | "unknown">) {
                     const file = y === "unknown" ? "index-unknown.html" : `index-${y}.html`;
                     const label = y === "unknown" ? "Unbekanntes Jahr" : String(y);
                     return `<li><a href="${file}">${escapeHtml(label)}</a></li>`;
-            })
-            .join("\n")}
+                })
+                .join("\n")}
         </ul>`;
 
-                    return `<!doctype html>
+    return `<!doctype html>
 <html lang="de">
 <head>
 <meta charset="utf-8"/>
@@ -302,76 +262,77 @@ function buildLandingHtml(years: Array<number | "unknown">) {
   ${links}
 </body>
 </html>`;
-                }
+}
 
-                /* ---------------- Main ---------------- */
+/* ---------------- Main ---------------- */
 
-            async function main() {
-            const dirs = await readdir(TICKETS_DIR, { withFileTypes: true });
+async function main() {
+    const dirs = await readdir(TICKETS_DIR, { withFileTypes: true });
 
-            const tickets: TicketEntry[] = [];
+    const tickets: TicketEntry[] = [];
 
-            for (const d of dirs) {
-            if (!d.isDirectory() || !d.name.startsWith("ticket-")) continue;
+    for (const d of dirs) {
+        if (!d.isDirectory() || !d.name.startsWith("ticket-")) continue;
 
-            const id = Number(d.name.slice(7));
-            if (!Number.isFinite(id)) continue;
+        const id = Number(d.name.slice(7));
+        if (!Number.isFinite(id)) continue;
 
-            const base = join(TICKETS_DIR, d.name);
-            const ticket = await readJson(join(base, "ticket.json"));
-            const articles = (await readJson(join(base, "articles.json"))) as any[] | null;
+        const base = join(TICKETS_DIR, d.name);
+        const ticket = await readJson(join(base, "ticket.json"));
+        const articles = (await readJson(join(base, "articles.json"))) as any[] | null;
 
-            const title = cleanText(ticket?.title) || cleanText(ticket?.subject) || "(ohne Titel)";
-            const createdAt = typeof ticket?.created_at === "string" ? ticket.created_at : undefined;
+        const title =
+            cleanText(ticket?.title) || cleanText(ticket?.subject) || "(ohne Titel)";
+        const createdAt =
+            typeof ticket?.created_at === "string" ? ticket.created_at : undefined;
 
-            tickets.push({
+        tickets.push({
             id,
             title,
             createdAt,
             year: yearFromDate(createdAt),
             author: deriveAuthor(ticket, articles),
-            role: deriveRole(ticket, articles),
             preview: derivePreview(articles),
-            });
-            }
+        });
+    }
 
-                // Gruppieren nach Jahr
-            const byYear = new Map<number | "unknown", TicketEntry[]>();
-            for (const t of tickets) {
-            const arr = byYear.get(t.year) ?? [];
-            arr.push(t);
-            byYear.set(t.year, arr);
-            }
+    // Gruppieren nach Jahr
+    const byYear = new Map<number | "unknown", TicketEntry[]>();
+    for (const t of tickets) {
+        const arr = byYear.get(t.year) ?? [];
+        arr.push(t);
+        byYear.set(t.year, arr);
+    }
 
-            const years = Array.from(byYear.keys()).sort((a, b) => {
-            if (a === "unknown") return 1;
-            if (b === "unknown") return -1;
-            return b - a;
-            });
+    const years = Array.from(byYear.keys()).sort((a, b) => {
+        if (a === "unknown") return 1;
+        if (b === "unknown") return -1;
+        return b - a;
+    });
 
-                // Jahresseiten schreiben
-            for (const y of years) {
-            const list = byYear.get(y)!;
+    // Jahresseiten schreiben
+    for (const y of years) {
+        const list = byYear.get(y)!;
 
-                // neueste zuerst (created_at), fallback id
-            list.sort((a, b) => {
+        // neueste zuerst (created_at), fallback id
+        list.sort((a, b) => {
             const da = a.createdAt ? Date.parse(a.createdAt) : -Infinity;
             const db = b.createdAt ? Date.parse(b.createdAt) : -Infinity;
             if (da !== db) return db - da;
             return a.id - b.id;
-            });
+        });
 
-            const name = y === "unknown" ? "index-unknown.html" : `index-${y}.html`;
-    await writeFile(join(OUT_DIR, name), buildYearHtml(y, list), "utf-8");
+        const name = y === "unknown" ? "index-unknown.html" : `index-${y}.html`;
+        await writeFile(join(OUT_DIR, name), buildYearHtml(y, list), "utf-8");
     }
 
-        // Landing page
+    // Landing page
     await writeFile(join(OUT_DIR, "index.html"), buildLandingHtml(years), "utf-8");
 
     console.log(`✅ Übersichten erstellt (${years.length} Jahre)`);
-    }
+}
 
-    main().catch((e) => {
+main().catch((e) => {
     console.error("❌ Fehler:", e);
     process.exitCode = 1;
-    });
+});
