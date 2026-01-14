@@ -2,6 +2,12 @@
 
 Let's you export tickets and generate year-based overview over your exported tickets.
 
+## Setup
+
+Run ```npm i``` in order to install dependencies.
+
+Use bun, deno or your favourite runtime.
+
 ## Usage / CLI
 
 ### Export Tickets to ./out
