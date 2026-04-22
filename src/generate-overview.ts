@@ -11,7 +11,7 @@
  *
  * Features:
  *  - Live-Suche (Client-side) in den Jahresübersichten
- *  - Anzeige: Ticket-ID, Titel, Erstellungsdatum, Autor (Name), Vorschau (max 128)
+ *  - Anzeige: Ticket-Nr. (Zammad), Titel, Erstellungsdatum, Autor (Name), Vorschau (max 128)
  *
  * Hinweis:
  *  - Vorschau wird bewusst NICHT escaped in <pre>${t.preview}</pre>.
@@ -113,15 +113,35 @@ function derivePreview(articles: any[] | null): string {
     return "(keine Vorschau)";
 }
 
+// Zammad default state IDs (standard defaults; may vary per installation)
+const STATE_ID_MAP: Record<number, string> = {
+    1: "new",
+    2: "open",
+    3: "pending reminder",
+    4: "closed",
+    5: "merged",
+    6: "pending close",
+    7: "removed",
+};
+
+function deriveStatus(ticket: any): string | undefined {
+    if (typeof ticket?.state === "string" && ticket.state) return ticket.state;
+    const sid = ticket?.state_id;
+    if (typeof sid === "number") return STATE_ID_MAP[sid] ?? `state_id:${sid}`;
+    return undefined;
+}
+
 /* ---------------- Types ---------------- */
 
 type TicketEntry = {
     id: number;
+    ticketNumber?: string;
     title: string;
     createdAt?: string;
     year: number | "unknown";
     author: string;
     preview: string;
+    status?: string;
 };
 
 /* ---------------- HTML builders ---------------- */
@@ -134,16 +154,25 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
 
     const items = tickets
         .map((t) => {
-            const searchText = `${t.id} ${t.title} ${t.author} ${t.preview} ${formatDate(t.createdAt)}`
-                .toLowerCase()
-                .replace(/\s+/g, " ")
-                .trim();
+            const displayNumber = t.ticketNumber
+                ? `#${t.ticketNumber}`
+                : `ID ${t.id}`;
+            const searchText =
+                `${t.ticketNumber ?? ""} ${t.id} ${t.title} ${t.author} ${t.preview} ${formatDate(t.createdAt)} ${t.status ?? ""}`
+                    .toLowerCase()
+                    .replace(/\s+/g, " ")
+                    .trim();
+
+            const statusBadge =
+                t.status && t.status !== "open"
+                    ? ` <span class="badge badge-${escapeHtml(t.status.replace(/\s+/g, "-"))}">${escapeHtml(t.status)}</span>`
+                    : "";
 
             return `<li class="item" data-search="${escapeHtml(searchText)}">
         <div class="top">
           <a href="tickets/ticket-${t.id}/index.html">
-            <strong>#${t.id}</strong> – ${escapeHtml(t.title)}
-          </a>
+            <strong>${escapeHtml(displayNumber)}</strong> – ${escapeHtml(t.title)}
+          </a>${statusBadge}
         </div>
         <div class="meta">
           <span>Erstellt: ${escapeHtml(formatDate(t.createdAt))}</span>
@@ -177,6 +206,10 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
   .preview pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; }
   .nav { margin-top: 14px; }
   a { word-break: break-word; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; margin-left: 6px; vertical-align: middle; }
+  .badge-merged { background: #e0cfff; color: #5b21b6; }
+  .badge-closed { background: #d1fae5; color: #065f46; }
+  .badge-pending-reminder, .badge-pending-close { background: #fef3c7; color: #92400e; }
 </style>
 </head>
 <body>
@@ -184,7 +217,7 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
 
   <div class="toolbar">
     <div class="search">
-      <input id="q" type="search" placeholder="Live-Suche (Titel, Autor, Vorschau, #ID …)" autocomplete="off" />
+      <input id="q" type="search" placeholder="Suche nach Ticket-Nr., Titel, Autor, Inhalt …" autocomplete="off" />
     </div>
     <div class="count">
       <span id="shown">${tickets.length}</span> / <span id="total">${tickets.length}</span>
@@ -206,7 +239,7 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
   const shown = document.getElementById('shown');
   const total = document.getElementById('total');
 
-  const items = Array.from(list.querySelectorAll('li.item'));
+  const items = Array.from(list.getElementsByTagName('li'));
   total.textContent = String(items.length);
 
   function apply() {
@@ -214,15 +247,18 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
     let visible = 0;
 
     for (const li of items) {
-      const hay = (li.getAttribute('data-search') || '');
+      const hay = li.getAttribute('data-search') || '';
       const ok = needle === '' || hay.includes(needle);
-      li.style.display = ok ? '' : 'none';
+      li.hidden = !ok;
       if (ok) visible++;
     }
     shown.textContent = String(visible);
   }
 
+  // 'input' covers typing; 'search' covers the ×-button; 'change' covers autofill
   q.addEventListener('input', apply);
+  q.addEventListener('search', apply);
+  q.addEventListener('change', apply);
   apply();
 })();
 </script>
@@ -285,14 +321,21 @@ async function main() {
             cleanText(ticket?.title) || cleanText(ticket?.subject) || "(ohne Titel)";
         const createdAt =
             typeof ticket?.created_at === "string" ? ticket.created_at : undefined;
+        const ticketNumber =
+            typeof ticket?.number === "string" || typeof ticket?.number === "number"
+                ? String(ticket.number)
+                : undefined;
+        const status = deriveStatus(ticket);
 
         tickets.push({
             id,
+            ticketNumber,
             title,
             createdAt,
             year: yearFromDate(createdAt),
             author: deriveAuthor(ticket, articles),
             preview: derivePreview(articles),
+            status,
         });
     }
 
