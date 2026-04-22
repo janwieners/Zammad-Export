@@ -106,8 +106,11 @@ async function fetchJson(url: string, token: string) {
     const res = await fetch(url, {
         headers: {
             Accept: "application/json",
-            Authorization: `Token token=${token}`,
+            Authorization: `Token token=${token}`
         },
+        tls: {
+            rejectUnauthorized: false
+        }
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return res.json();
@@ -122,7 +125,11 @@ async function downloadAttachment(
 ) {
     const url = `${BASE_URL}/ticket_attachment/${ticketId}/${articleId}/${attachmentId}`;
     const res = await fetch(url, {
-        headers: { Authorization: `Token token=${token}` },
+        headers: { Authorization: `Token token=${token}`,
+        },
+        tls: {
+            rejectUnauthorized: false
+        }
     });
     if (!res.ok) {
         throw new Error(`Attachment ${attachmentId} failed: ${res.status}`);
