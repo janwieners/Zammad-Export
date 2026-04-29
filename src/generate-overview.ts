@@ -19,10 +19,16 @@
  */
 
 import { readdir, readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { dirname, join, resolve } from "path";
 
-const TICKETS_DIR = "out/tickets";
-const OUT_DIR = "out";
+// CLI: --tickets <dir>   (default: out/tickets)
+const argv = process.argv.slice(2);
+const ticketsArgIdx = argv.indexOf("--tickets");
+const TICKETS_DIR =
+    ticketsArgIdx !== -1 && argv[ticketsArgIdx + 1]
+        ? resolve(argv[ticketsArgIdx + 1])
+        : resolve("out/tickets");
+const OUT_DIR = dirname(TICKETS_DIR);
 const PREVIEW_MAX = 128;
 
 /* ---------------- Helpers ---------------- */
