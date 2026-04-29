@@ -20,6 +20,25 @@ Example:
 
 ### Generate Searchable Ticket Overview
 
-```bun src/generate-overview.ts```
+```bun src/generate-overview.ts [--tickets <dir>]```
 
-Generates index.* files in ./out which let's you easily explore your ticket archive.
+Generates `index.html` and `index-<year>.html` files in the parent directory of the tickets folder.
+
+| Argument | Default | Description |
+|---|---|---|
+| `--tickets <dir>` | `out/tickets` | Path to the folder containing the exported tickets |
+
+Examples:
+
+```bash
+# Default: reads from out/tickets, writes to out/
+bun src/generate-overview.ts
+
+# Custom folder: reads from /data/tickets, writes to /data/
+bun src/generate-overview.ts --tickets /data/tickets
+```
+
+The overview pages feature:
+- **Live search** by ticket number (Zammad), title, author, and content
+- **Status badges** (merged, closed, pending …)
+- Year-based navigation
