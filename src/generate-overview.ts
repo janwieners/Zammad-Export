@@ -4,6 +4,7 @@
  * Erzeugt:
  *  - out/index.html              (Landing-Page mit Jahreslinks)
  *  - out/index-YYYY.html         (eine Übersicht pro Jahr)
+ *  - out/mapping.csv             (Ticket-Nummer -> interne ID/Ordnerpfad)
  *
  * Liest Daten aus:
  *  - out/tickets/ticket-<id>/ticket.json
@@ -14,8 +15,9 @@
  *  - Anzeige: Ticket-Nr. (Zammad), Titel, Erstellungsdatum, Autor (Name), Vorschau (max 128)
  *
  * Hinweis:
- *  - Vorschau wird bewusst NICHT escaped in <pre>${t.preview}</pre>.
- *    Stelle sicher, dass t.preview kein unsicheres HTML/JS enthält.
+ *  - Vorschau wird HTML-getrippt (derivePreview) UND beim Einsetzen escaped
+ *    (escapeHtml). So kann rohes Mail-HTML die Listenstruktur nicht zerstören
+ *    (früherer Bug: Eintrag wurde in der Suche gezählt, aber nicht gerendert).
  */
 
 import { readdir, readFile, writeFile } from "fs/promises";
@@ -102,12 +104,16 @@ function deriveAuthor(ticket: any, articles: any[] | null): string {
  * Vorschau (max 128):
  *  - nimmt den ersten Artikel body/body_html (strip tags)
  */
-function derivePreview(articles: any[] | null): string {
+export function derivePreview(articles: any[] | null): string {
     if (!Array.isArray(articles)) return "(keine Vorschau)";
 
     for (const a of articles) {
         const body =
-            cleanText(a?.body) ||
+            cleanText(
+                typeof a?.body === "string"
+                    ? a.body.replace(/<[^>]+>/g, " ")
+                    : ""
+            ) ||
             cleanText(
                 typeof a?.body_html === "string"
                     ? a.body_html.replace(/<[^>]+>/g, " ")
@@ -150,9 +156,37 @@ type TicketEntry = {
     status?: string;
 };
 
+/* ---------------- CSV builder ---------------- */
+
+/**
+ * Erzeugt eine Zuordnung Ticket-Nummer -> interne ID (Ordner).
+ * Löst das Auffinden per Zammad-Nummer auf der Platte: Ordner heißen nach der
+ * internen ID, Nutzer suchen aber nach der Nummer.
+ */
+export function buildMappingCsv(tickets: TicketEntry[]): string {
+    const quote = (v: string) =>
+        /[",\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v;
+
+    const rows = [...tickets]
+        .sort((a, b) => (a.ticketNumber ?? "").localeCompare(b.ticketNumber ?? "", undefined, { numeric: true }))
+        .map((t) =>
+            [
+                t.ticketNumber ?? "",
+                String(t.id),
+                String(t.year),
+                `tickets/ticket-${t.id}/index.html`,
+                t.title,
+            ]
+                .map((f) => quote(f))
+                .join(","),
+        );
+
+    return ["number,id,year,path,title", ...rows].join("\n") + "\n";
+}
+
 /* ---------------- HTML builders ---------------- */
 
-function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
+export function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
     const title =
         year === "unknown"
             ? "Ticket-Export – Unbekanntes Jahr"
@@ -184,7 +218,7 @@ function buildYearHtml(year: number | "unknown", tickets: TicketEntry[]) {
           <span>Erstellt: ${escapeHtml(formatDate(t.createdAt))}</span>
           <span>Autor: ${escapeHtml(t.author)}</span>
         </div>
-        <div class="preview"><pre>${t.preview}</pre></div>
+        <div class="preview"><pre>${escapeHtml(t.preview)}</pre></div>
       </li>`;
         })
         .join("\n");
@@ -378,10 +412,17 @@ async function main() {
     // Landing page
     await writeFile(join(OUT_DIR, "index.html"), buildLandingHtml(years), "utf-8");
 
-    console.log(`✅ Übersichten erstellt (${years.length} Jahre)`);
+    // Zuordnung Ticket-Nummer -> interne ID/Ordner (zum Auffinden per Nummer)
+    await writeFile(join(OUT_DIR, "mapping.csv"), buildMappingCsv(tickets), "utf-8");
+
+    console.log(
+        `✅ Übersichten erstellt (${years.length} Jahre, ${tickets.length} Tickets, mapping.csv geschrieben)`,
+    );
 }
 
-main().catch((e) => {
-    console.error("❌ Fehler:", e);
-    process.exitCode = 1;
-});
+if (import.meta.main) {
+    main().catch((e) => {
+        console.error("❌ Fehler:", e);
+        process.exitCode = 1;
+    });
+}

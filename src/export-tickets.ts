@@ -14,6 +14,7 @@
  */
 
 import {environment} from "./environment";
+import { withRetry } from "./retry";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 
@@ -72,6 +73,19 @@ type ZammadArticle = {
     [k: string]: unknown;
 };
 
+/* ---------------- Failure tracking ---------------- */
+
+// Tickets, die trotz Retries nicht exportiert werden konnten (echte Fehler,
+// nicht: nicht existierende IDs oder falsche Gruppe).
+const failures: Array<{ id: number; error: string }> = [];
+let exportedCount = 0;
+
+// Nur transiente Fehler wiederholen: Netzwerkfehler (kein Status) oder 5xx/429.
+function isTransient(err: any): boolean {
+    const s = err?.status;
+    return s === undefined || s === 429 || (typeof s === "number" && s >= 500 && s <= 599);
+}
+
 /* ---------------- Helpers ---------------- */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -112,7 +126,11 @@ async function fetchJson(url: string, token: string) {
             rejectUnauthorized: false
         }
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+        const err: any = new Error(`${res.status} ${res.statusText}`);
+        err.status = res.status;
+        throw err;
+    }
     return res.json();
 }
 
@@ -132,7 +150,9 @@ async function downloadAttachment(
         }
     });
     if (!res.ok) {
-        throw new Error(`Attachment ${attachmentId} failed: ${res.status}`);
+        const err: any = new Error(`Attachment ${attachmentId} failed: ${res.status}`);
+        err.status = res.status;
+        throw err;
     }
     const buf = Buffer.from(await res.arrayBuffer());
     await writeFile(targetPath, buf);
@@ -233,19 +253,37 @@ ${articlesHtml}
 /* ---------------- Main logic ---------------- */
 
 async function processTicket(ticketId: number, token: string) {
-    try {
-        const ticket = await fetchJson(`${BASE_URL}/tickets/${ticketId}`, token);
-        if (ticket.group_id !== ONLY_GROUP_ID) return;
+    const retry = { retries: 3, delayMs: 500, shouldRetry: isTransient };
 
+    // Schritt 1: Ticket laden. 404 = ID existiert nicht (in Zammad haben IDs
+    // Lücken bzw. gehören anderen Gruppen) -> normal, kein Fehler.
+    let ticket: any;
+    try {
+        ticket = await withRetry(
+            () => fetchJson(`${BASE_URL}/tickets/${ticketId}`, token),
+            retry
+        );
+    } catch (err: any) {
+        if (err?.status === 404) return; // Lücke, still überspringen
+        failures.push({ id: ticketId, error: err?.message ?? String(err) });
+        console.warn(`❌ Ticket ${ticketId} FEHLGESCHLAGEN (${err?.message ?? err})`);
+        return;
+    }
+
+    if (ticket.group_id !== ONLY_GROUP_ID) return; // andere Queue, normal
+
+    // Schritt 2: Ticket gehört zur Queue -> exportieren. Fehler hier sind echte
+    // Fehler (das Ticket SOLLTE exportiert werden) und werden erfasst.
+    try {
         const dir = join(OUTPUT_DIR, `ticket-${ticketId}`);
         const attachmentsDir = join(dir, "attachments");
         await mkdir(attachmentsDir, { recursive: true });
 
         await writeFile(join(dir, "ticket.json"), JSON.stringify(ticket, null, 2));
 
-        const articles = (await fetchJson(
-            `${BASE_URL}/ticket_articles/by_ticket/${ticketId}`,
-            token
+        const articles = (await withRetry(
+            () => fetchJson(`${BASE_URL}/ticket_articles/by_ticket/${ticketId}`, token),
+            retry
         )) as ZammadArticle[];
 
         await writeFile(
@@ -258,12 +296,16 @@ async function processTicket(ticketId: number, token: string) {
         for (const a of articles) {
             for (const att of a.attachments ?? []) {
                 const name = `${a.id}__${att.id}__${safeFilename(att.filename)}`;
-                await downloadAttachment(
-                    ticketId,
-                    a.id,
-                    att.id,
-                    join(attachmentsDir, name),
-                    token
+                await withRetry(
+                    () =>
+                        downloadAttachment(
+                            ticketId,
+                            a.id,
+                            att.id,
+                            join(attachmentsDir, name),
+                            token
+                        ),
+                    retry
                 );
                 attachmentIndex.push({
                     articleId: a.id,
@@ -277,9 +319,11 @@ async function processTicket(ticketId: number, token: string) {
         const html = buildHtml(ticket, ticketId, articles, attachmentIndex);
         await writeFile(join(dir, "index.html"), html);
 
+        exportedCount++;
         console.log(`✅ Ticket ${ticketId} exportiert`);
     } catch (err: any) {
-        console.warn(`⚠️ Ticket ${ticketId} übersprungen (${err.message})`);
+        failures.push({ id: ticketId, error: err?.message ?? String(err) });
+        console.warn(`❌ Ticket ${ticketId} FEHLGESCHLAGEN (${err?.message ?? err})`);
     }
 }
 
@@ -301,7 +345,19 @@ async function main() {
         if (SLEEP_MS_PER_TICKET > 0) await sleep(SLEEP_MS_PER_TICKET);
     }
 
-    console.log("🎉 Export abgeschlossen");
+    console.log(
+        `🎉 Export abgeschlossen: ${exportedCount} exportiert, ${failures.length} fehlgeschlagen`
+    );
+
+    if (failures.length > 0) {
+        const failPath = join(OUTPUT_DIR, "failed.json");
+        await writeFile(failPath, JSON.stringify(failures, null, 2));
+        const ids = failures.map((f) => f.id).join(", ");
+        console.warn(
+            `⚠️ ${failures.length} Ticket(s) trotz Retries fehlgeschlagen: ${ids}`
+        );
+        console.warn(`   Details in ${failPath}. Erneut versuchen mit --start/--end für diese IDs.`);
+    }
 }
 
 main();
